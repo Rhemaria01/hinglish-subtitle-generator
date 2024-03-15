@@ -13,6 +13,7 @@ const {
   parseSRT,
   addToFile,
   createDir,
+  deleteFile,
 } = require("./utils");
 require("dotenv").config({ override: true });
 const ffmpeg = require("fluent-ffmpeg");
@@ -50,10 +51,15 @@ const testingFiles = [
     TranscriptionJobName: "hin_reactRoadmap_30Mins_subtitle",
     videoFileKey: "hin_reactRoadmap_30Mins.mp4",
   },
+  {
+    index: 5,
+    TranscriptionJobName: "hin_old_clip_8mins_subtitle",
+    videoFileKey: "hin_old_clip_8mins.mp4",
+  },
 ];
 
 //element of testing files
-let testIndex = 4;
+let testIndex = 3;
 
 //video file and subtitle names
 const videoFileKey = testingFiles[testIndex].videoFileKey;
@@ -77,25 +83,6 @@ const input = {
 //name of subtitle file on S3
 const fileKey = `${input.OutputKey}${input.TranscriptionJobName}`;
 
-async function main() {
-  //if job already exists in aws than skip using startTranscription function and use this instead:
-  // const srtFile = await getFile(`${fileKey}.srt`, region, credentials);
-
-  const srtFile = await startTranscriptionRequest();
-
-  console.log("Sending original transcription to openai.");
-  const hinglishTranscription = await getHinglishTranscription(srtFile);
-
-  // adding sorted hinglish transcription to subtitle file
-  addToFile(hinglishSubFileName, hinglishTranscription);
-  await timeout(1000);
-
-  console.log("Adding subtitles to video");
-  await addSrtToVideo(hinglishSubFileName);
-
-  console.log("Completed");
-}
-
 // Get the video file from S3 Bucket and Start a transcription job for that file
 async function startTranscriptionRequest() {
   console.log("Starting Transcription");
@@ -112,7 +99,6 @@ async function startTranscriptionRequest() {
     console.log("Transcription job created, the details:");
     console.log(transcribeResponse.TranscriptionJob);
   } catch (err) {
-    console.log(err);
     throw new Error(err);
   }
 
@@ -148,56 +134,95 @@ async function getHinglishTranscription(awsTranscription) {
   awsTranscription = parseSRT(awsTranscription);
 
   let count = 0;
+  const requestObj = {};
   const result = [];
   await Promise.all(
     awsTranscription.map(async (transcription, index) => {
       count++;
-      console.log("Sending to openai:", count);
+      let tempCount = count;
+      requestObj[tempCount] = "pending";
+      console.log(
+        "Request number:",
+        tempCount,
+        "status:",
+        requestObj[tempCount]
+      );
+      try {
+        let hinglishTranscription = await client.chat.completions.create({
+          model: "gpt-4-0125-preview",
+          messages: [
+            {
+              role: "system",
+              content: `Convert the following transcription provide by user this into Hinglish transcription, Output should be in SRT format.
+  Do not use Code block in your answer.
+  Here is an Example Input:
+  00:00:00,039 --> 00:00:01,159
+  दोस्तों के साथ कितने लोग आए है?
+  
+  2
+  00:00:02,119 --> 00:00:04,159
+  तुम लोग आपस में अपनी salary discuss कर लेते हो।
+  
+  3
+  00:00:05,400 --> 00:00:08,000
+  मेरे दोस्त मुझे बताते नहीं थे मैंने उसकी जीवनसाथी profile देख ली।
+  
+  4
+  00:00:10,710 --> 00:00:12,170
+  अब मेरा उधार वापिस कर हरामखोर
+  
+  Output format should be as follows: 
+  1
+  00:00:00,039 --> 00:00:01,159
+  Dosto ke saath kitne log aaye hain?
+  
+  2
+  00:00:02,119 --> 00:00:04,159
+  Tum log aapas mein apni salary discuss kar lete ho.
+  
+  3
+  00:00:05,400 --> 00:00:08,000
+  Mere dosto mujhe batate nahi the maine uski jeevansathi profile dekh li.
+  
+  4
+  00:00:10,710 --> 00:00:12,170
+  Ab mera udhaar vapas kar haramkhor
+  
+  Do Not Miss any segment and convert the complete file. 
+  Convert Hindi Words to Hinglish and let english words be english only.
+  Convert Hindi Punctuation marks to english punctuation marks
+  Example:
+  "|" shoulde be converted to "."
+  Convert each and every word.
+            `,
+            },
+            {
+              role: "user",
+              content: transcription,
+            },
+          ],
+        });
 
-      let hinglishTranscription = await client.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content: `Convert the following transcription provide by user this into Hinglish transcription, Output should be in SRT format.
-Do not use Code block in your answer.   
-Format the answer as follows: 
-1
-00:00:00,119 --> 00:00:00,879
-Hinglish Transcription
-
-2
-00:00:02,700 --> 00:00:03,779
-Hinglish Transcription
-
-3
-00:00:04,119 --> 00:00:04,879
-Hinglish Transcription
-
-4
-00:00:05,700 --> 00:00:05,779
-Hinglish Transcription
-
-Do Not Miss any segment and convert the complete file. 
-Convert Hindi Words to Hinglish and let english words be english only.
-Convert each and every word.
-          `,
-          },
-          {
-            role: "user",
-            content: transcription,
-          },
-        ],
-      });
-
-      result.push({
-        index,
-        srt: hinglishTranscription.choices[0].message.content + "\n\n",
-      });
+        result.push({
+          index,
+          srt: hinglishTranscription.choices[0].message.content + "\n\n",
+        });
+        requestObj[tempCount] = "completed";
+      } catch (error) {
+        console.log(error);
+        requestObj[tempCount] = "failed";
+      }
+      console.log(
+        "Request number:",
+        tempCount,
+        "status:",
+        requestObj[tempCount]
+      );
     })
   );
   console.log(
-    "All the requests are completed, sorting and returning the hinglish subtitles."
+    "All the requests are completed, sorting and returning the hinglish subtitles.",
+    requestObj
   );
   return result
     .sort((a, b) => a.index - b.index)
@@ -213,9 +238,37 @@ async function addSrtToVideo(srt) {
     .on("error", function (err) {
       console.log(err);
     })
+    .on("end", function () {
+      console.log(
+        "Completed video:",
+        `hinglish_videos/Hinglish_${videoFileKey}`
+      );
+    })
     .save(`hinglish_videos/Hinglish_${videoFileKey}`);
 }
 
-createDir("hinglish_srt");
+//creating required directories
 createDir("hinglish_videos");
+createDir("hinglish_srt");
+
+//deleting hinglish video and subtitle if they already exists
+deleteFile(`hinglish_videos/Hinglish_${videoFileKey}`);
+deleteFile(hinglishSubFileName);
+
+async function main() {
+  //if job already exists in aws than skip using startTranscription function and use this instead:
+  // const srtFile = await getFile(`${fileKey}.srt`, region, credentials);
+
+  const srtFile = await startTranscriptionRequest();
+
+  console.log("Sending original transcription to openai.");
+  const hinglishTranscription = await getHinglishTranscription(srtFile);
+
+  // adding sorted hinglish transcription to subtitle file
+  addToFile(hinglishSubFileName, hinglishTranscription);
+  await timeout(1000);
+
+  console.log("Adding subtitles to video");
+  await addSrtToVideo(hinglishSubFileName);
+}
 main();

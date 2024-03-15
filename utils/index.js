@@ -51,6 +51,14 @@ function createDir(dirName) {
   }
 }
 
+function deleteFile(fileName) {
+  if (fs.existsSync(fileName)) {
+    fs.unlink(fileName, (err) => {
+      if (err) throw err;
+      console.log("deleted", fileName);
+    });
+  }
+}
 //function to convert json to srt and add it to hingligh.srt file
 async function jsonToSrt(json, srtFileName) {
   let srt = "";
@@ -110,4 +118,5 @@ module.exports = {
   readFileToString,
   parseSRT,
   createDir,
+  deleteFile,
 };
